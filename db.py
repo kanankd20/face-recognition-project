@@ -1,104 +1,78 @@
 import pyodbc
 import numpy as np
-from collections import defaultdict
 
-def get_connection():
-    return pyodbc.connect(
-        "DRIVER={ODBC Driver 17 for SQL Server};"
-        "SERVER=kanu\\SQLEXPRESS;"
-        "DATABASE=FaceRecognitionDB;"
-        "Trusted_Connection=yes;"
-    )
+# ---------- CONNECTION ----------
+conn = pyodbc.connect(
+    "DRIVER={ODBC Driver 17 for SQL Server};"
+    "SERVER=localhost\\SQLEXPRESS;"
+    "DATABASE=FaceRecognitionDB;"
+    "Trusted_Connection=yes;"
+)
+cursor = conn.cursor()
 
-# Create person
+# ---------- INSERT PERSON ----------
 def insert_person():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("INSERT INTO Persons DEFAULT VALUES")
+    cursor.execute("INSERT INTO persons DEFAULT VALUES")
     conn.commit()
+    cursor.execute("SELECT @@IDENTITY")
+    return int(cursor.fetchone()[0])
 
-    cursor.execute("SELECT SCOPE_IDENTITY()")
-    person_id = int(cursor.fetchone()[0])
-
-    conn.close()
-    return person_id
-
-# Save embedding
+# ---------- SAVE EMBEDDING ----------
 def save_embedding(person_id, embedding):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    embedding_bytes = embedding.astype(np.float32).tobytes()
-
+    emb_bytes = embedding.astype(np.float32).tobytes()
     cursor.execute(
-        "INSERT INTO FaceEmbeddings (PersonID, Embedding) VALUES (?, ?)",
-        person_id,
-        pyodbc.Binary(embedding_bytes)
+        "INSERT INTO embeddings (person_id, embedding) VALUES (?, ?)",
+        (person_id, emb_bytes)
     )
-
     conn.commit()
-    conn.close()
 
-# Load all embeddings (Grouped)
+# ---------- GET ALL EMBEDDINGS ----------
 def get_all_embeddings():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT PersonID, Embedding FROM FaceEmbeddings")
+    cursor.execute("SELECT person_id, embedding FROM embeddings")
     rows = cursor.fetchall()
-    conn.close()
 
-    grouped = defaultdict(list)
+    data = {}
 
     for row in rows:
         person_id = row[0]
-        embedding = np.frombuffer(row[1], dtype=np.float32)
-        grouped[person_id].append(embedding)
+        emb = np.frombuffer(row[1], dtype=np.float32)
 
-    return grouped
+        if person_id not in data:
+            data[person_id] = []
 
-# Log visit
+        data[person_id].append(emb)
+
+    return data
+
+# ---------- VISITS ----------
 def log_visit(person_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("INSERT INTO VisitHistory (PersonID) VALUES (?)", person_id)
+    cursor.execute(
+        "INSERT INTO visits (person_id) VALUES (?)",
+        (person_id,)
+    )
     conn.commit()
-    conn.close()
 
-# Visit count
 def get_visit_count(person_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-
     cursor.execute(
-        "SELECT COUNT(*) FROM VisitHistory WHERE PersonID = ?",
-        person_id
+        "SELECT COUNT(*) FROM visits WHERE person_id=?",
+        (person_id,)
     )
+    return cursor.fetchone()[0]
+# ---------- ANALYTICS ----------
+def get_total_persons():
+    cursor.execute("SELECT COUNT(*) FROM persons")
+    return cursor.fetchone()[0]
 
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
+def get_total_visits():
+    cursor.execute("SELECT COUNT(*) FROM visits")
+    return cursor.fetchone()[0]
 
-# Save person image path (optional table)
-def save_person_image(person_id, image_path):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "INSERT INTO PersonImages (PersonID, ImagePath) VALUES (?, ?)",
-        person_id,
-        image_path
-    )
-
-    conn.commit()
-    conn.close()
-
-def get_person_images(person_id):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT ImagePath FROM PersonImages WHERE PersonID = ?", person_id)
-    rows = cursor.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
+def get_top_person():
+    cursor.execute("""
+        SELECT TOP 1 person_id, COUNT(*) as visits
+        FROM visits
+        GROUP BY person_id
+        ORDER BY visits DESC
+    """)
+    row = cursor.fetchone()
+    return row if row else (None, 0)
